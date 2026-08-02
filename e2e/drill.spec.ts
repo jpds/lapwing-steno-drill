@@ -70,15 +70,16 @@ test.afterEach(async ({ page }) => {
   expect((page as any)._consoleErrors ?? []).toEqual([]);
 });
 
-test("renders a word and chord with no clipping", async ({ page }) => {
+test("renders a word and chord with no clipping, and shows 1 / N progress", async ({ page }) => {
   await expect(page.locator(".word-panel")).toBeVisible();
+  await expect(page.locator(".drill-progress")).toHaveText("1 / " + WORDS.length);
   const svg = page.locator(".chord-view svg");
   await expect(svg).toBeVisible();
   const box = await svg.boundingBox();
   expect(box?.width).toBeGreaterThan(600);
 });
 
-test("typing the correct stroke highlights it green then advances", async ({ page }) => {
+test("typing the correct stroke highlights it green, advances, and the progress counter increments", async ({ page }) => {
   const stroke = await currentStroke(page);
   const word = await currentWord(page);
   await page.keyboard.type(stroke);
@@ -88,6 +89,7 @@ test("typing the correct stroke highlights it green then advances", async ({ pag
   // still showing the resolved (correct) chord during the flash window
   await expect(page.locator(".steno-key.correct")).not.toHaveCount(0);
   await expect(page.locator(".word-panel")).not.toHaveText(word, { timeout: 2000 });
+  await expect(page.locator(".drill-progress")).toHaveText("2 / " + WORDS.length);
 });
 
 test("typing a wrong stroke highlights it red and can be corrected with no delay", async ({ page }) => {
@@ -222,7 +224,7 @@ test("declares the drill complete after the last word, and restart works", async
 
   await page.getByText("Restart", { exact: true }).click();
   await expect(page.locator(".drill-complete")).toHaveCount(0);
-  await expect(page.locator(".word-panel")).toBeVisible();
+  await expect(page.locator(".drill-progress")).toHaveText("1 / " + WORDS.length);
 });
 
 test("a fresh visit with no saved list shows the textbox, not a drill", async ({ page }) => {
@@ -235,6 +237,7 @@ test("a fresh visit with no saved list shows the textbox, not a drill", async ({
 test("reloading the page keeps the previously loaded word list", async ({ page }) => {
   await page.reload();
   await expect(page.locator(".word-panel")).toBeVisible();
+  await expect(page.locator(".drill-progress")).toHaveText("1 / " + WORDS.length);
 });
 
 test("rejects an invalid stroke with an inline error and keeps the pasted text", async ({ page }) => {

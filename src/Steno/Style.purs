@@ -63,6 +63,7 @@ css = do
     (Feature "prefers-color-scheme" (Just (fromString "dark")) :| [])
     (root darkTheme)
   bodyRule
+  drillProgressRule
   drillColumnsRule
   wordPanelRule
   chordViewRule
@@ -112,6 +113,13 @@ bodyRule = select (fromString "body") do
   padding (px 0.0) (rem 1.0) (px 0.0) (rem 1.0)
   varProp "background" "--bg"
   varProp "color" "--fg"
+
+drillProgressRule :: CSS
+drillProgressRule = select (fromString ".drill-progress") do
+  fontSize (rem 1.0)
+  fontFamily [] (monospace :| [])
+  TextAlign.textAlign TextAlign.center
+  varProp "color" "--key-text"
 
 drillColumnsRule :: CSS
 drillColumnsRule = select (fromString ".drill-columns") do

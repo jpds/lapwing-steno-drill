@@ -252,6 +252,9 @@ renderCompleted wb =
 renderDrill :: forall m. NonEmptyArray WordEntry -> State -> Array (H.ComponentHTML Action () m)
 renderDrill wb state =
   [ HH.div
+      [ HP.class_ (HH.ClassName "drill-progress") ]
+      [ HH.text (show (state.index + 1) <> " / " <> show (NEA.length wb)) ]
+  , HH.div
       [ HP.class_ (HH.ClassName "drill-columns") ]
       [ HH.div
           [ HP.class_ (HH.ClassName "word-panel") ]
