@@ -46,20 +46,25 @@ totalHeight = rowY RowVowel + keySize
 
 -- | `pressed` is what's been typed so far (or the just-completed attempt);
 -- | `expected` is the current word's correct chord. A pressed key renders
--- | green if it's part of the expected chord, red otherwise; keys not yet
--- | pressed stay neutral regardless of `expected`, so the answer is never
--- | revealed ahead of time — unless `hint` is on, which outlines (but
--- | doesn't fill) the expected keys, for a learner who's stuck.
-chordSvg :: forall w i. { pressed :: Set StenoKey, expected :: Set StenoKey, hint :: Boolean } -> HH.HTML w i
-chordSvg { pressed, expected, hint } =
+-- | green if it's part of the expected chord, red otherwise. Unpressed keys
+-- | stay neutral, so the answer is never revealed ahead of time — unless
+-- | `hint` is on (the stuck-learner countdown), which outlines expected keys
+-- | in amber, or `missing` is on (the post-submission review flash), which
+-- | outlines expected-but-unpressed keys in red to call out what was left
+-- | out of a wrong attempt. A key that's both missing and part of an
+-- | active hint gets both classes, so its border can alternate between the
+-- | two colors instead of just sitting on plain red — a missing key on its
+-- | own stays static so the review flash doesn't compete for attention.
+chordSvg :: forall w i. { pressed :: Set StenoKey, expected :: Set StenoKey, hint :: Boolean, missing :: Boolean } -> HH.HTML w i
+chordSvg { pressed, expected, hint, missing } =
   SE.svg
     [ SA.viewBox (-strokePad) (-strokePad) (totalWidth + 2.0 * strokePad) (totalHeight + 2.0 * strokePad)
     , SA.classes [ HH.ClassName "chord-svg" ]
     ]
-    (map (renderKey pressed expected hint) orderedKeys)
+    (map (renderKey pressed expected hint missing) orderedKeys)
 
-renderKey :: forall w i. Set StenoKey -> Set StenoKey -> Boolean -> KeySpec -> HH.HTML w i
-renderKey pressed expected hint spec =
+renderKey :: forall w i. Set StenoKey -> Set StenoKey -> Boolean -> Boolean -> KeySpec -> HH.HTML w i
+renderKey pressed expected hint missing spec =
   SE.g []
     [ SE.rect
         [ SA.x xPos
@@ -67,7 +72,7 @@ renderKey pressed expected hint spec =
         , SA.width keySize
         , SA.height height
         , SA.rx 4.0
-        , SA.classes ([ HH.ClassName "steno-key", HH.ClassName stateClass ] <> hintClass)
+        , SA.classes ([ HH.ClassName "steno-key", HH.ClassName stateClass ] <> outlineClass)
         ]
     , SE.text
         [ SA.x (xPos + keySize / 2.0)
@@ -82,10 +87,16 @@ renderKey pressed expected hint spec =
   xPos = spec.gridCol * colWidth + colWidth / 2.0
   yPos = rowY spec.gridRow
   height = rowHeight spec.gridRow
+  isPressed = Set.member spec.key pressed
+  isExpected = Set.member spec.key expected
   stateClass
-    | not (Set.member spec.key pressed) = "idle"
-    | Set.member spec.key expected = "correct"
+    | not isPressed = "idle"
+    | isExpected = "correct"
     | otherwise = "incorrect"
-  hintClass
-    | hint && Set.member spec.key expected = [ HH.ClassName "hint" ]
+  isMissing = missing && not isPressed && isExpected
+  isHinted = hint && isExpected
+  outlineClass
+    | isMissing && isHinted = [ HH.ClassName "missing", HH.ClassName "hint" ]
+    | isMissing = [ HH.ClassName "missing" ]
+    | isHinted = [ HH.ClassName "hint" ]
     | otherwise = []

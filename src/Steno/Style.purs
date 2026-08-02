@@ -18,6 +18,7 @@ import CSS
   , fontSize
   , height
   , key
+  , keyframes
   , margin
   , maxWidth
   , padding
@@ -38,6 +39,7 @@ import CSS.String (fromString)
 import CSS.TextAlign as TextAlign
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.NonEmpty ((:|))
+import Data.Tuple (Tuple(..))
 
 stylesheet :: String
 stylesheet = fromMaybe "" (renderedSheet (render css))
@@ -71,6 +73,7 @@ css = do
   actionBtnRule
   listInputRule
   listErrorRule
+  missingAlternateKeyframes
   keyRules
 
 lightTheme :: CSS
@@ -85,6 +88,7 @@ lightTheme = do
   prop "--key-incorrect-bg" "#e05252"
   prop "--key-incorrect-text" "#2b0f0f"
   prop "--key-hint-border" "#f0ad4e"
+  prop "--key-missing-border" "#e05252"
 
 darkTheme :: CSS
 darkTheme = do
@@ -98,6 +102,7 @@ darkTheme = do
   prop "--key-incorrect-bg" "#e05252"
   prop "--key-incorrect-text" "#2b0f0f"
   prop "--key-hint-border" "#f0ad4e"
+  prop "--key-missing-border" "#e05252"
 
 bodyRule :: CSS
 bodyRule = select (fromString "body") do
@@ -188,6 +193,20 @@ listErrorRule = select (fromString ".list-error") do
   varProp "color" "--key-incorrect-bg"
   prop "white-space" "pre-wrap"
 
+-- | Red at 0%/100%, amber at the halfway point, with the browser
+-- | interpolating `stroke` between stops. Applied only to a missing key
+-- | that's also being hinted (see keyRules' `.missing.hint` rule) — a
+-- | missing key on its own stays a plain static red.
+missingAlternateKeyframes :: CSS
+missingAlternateKeyframes =
+  keyframes "missing-alternate"
+    ( Tuple 0.0 (varProp "stroke" "--key-missing-border")
+        :|
+          [ Tuple 50.0 (varProp "stroke" "--key-hint-border")
+          , Tuple 100.0 (varProp "stroke" "--key-missing-border")
+          ]
+    )
+
 keyRules :: CSS
 keyRules = do
   select (fromString ".steno-key") do
@@ -202,6 +221,11 @@ keyRules = do
   select (fromString ".steno-key.hint") do
     varProp "stroke" "--key-hint-border"
     prop "stroke-width" "3"
+  select (fromString ".steno-key.missing") do
+    varProp "stroke" "--key-missing-border"
+    prop "stroke-width" "3"
+  select (fromString ".steno-key.missing.hint") do
+    prop "animation" "missing-alternate 4s linear infinite"
   select (fromString ".steno-key-label") do
     varProp "fill" "--key-text"
   select (fromString ".steno-key-label.correct") do

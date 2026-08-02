@@ -222,6 +222,7 @@ renderDrill wb state =
               { pressed: parseStroke state.typed
               , expected: parseStroke entry.stroke
               , hint: state.showHint
+              , missing: state.locked
               }
           ]
       ]

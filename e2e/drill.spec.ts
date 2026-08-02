@@ -71,6 +71,27 @@ test("typing a wrong stroke highlights it red and retries the same word", async 
   await expect(page.locator(".steno-key.incorrect")).toHaveCount(0);
 });
 
+test("a wrong stroke missing keys outlines the missing ones during the review flash", async ({ page }) => {
+  // advance to "and" (SKP), which has enough keys to leave one out
+  await page.getByText("Next word", { exact: true }).click();
+  await page.getByText("Next word", { exact: true }).click();
+  await page.getByText("Next word", { exact: true }).click();
+  await expect(page.locator(".word-panel")).toHaveText("and");
+
+  await page.keyboard.type("SK ");
+  await expect(page.locator(".steno-key.correct")).toHaveCount(2);
+  await expect(page.locator(".steno-key.incorrect")).toHaveCount(0);
+  // P was never pressed, but it's missing from a wrong attempt, so it's
+  // outlined red without being filled green/red like the pressed S and K
+  await expect(page.locator(".steno-key.missing")).toHaveCount(1);
+  await expect(page.locator(".steno-key.missing.correct")).toHaveCount(0);
+  await expect(page.locator(".steno-key.missing.incorrect")).toHaveCount(0);
+
+  // retries the same word once the flash resolves
+  await expect(page.locator(".word-panel")).toHaveText("and", { timeout: 2000 });
+  await expect(page.locator(".steno-key.missing")).toHaveCount(0);
+});
+
 test("clicking elsewhere on the page still lets you type (no visible input needed)", async ({ page }) => {
   await page.locator(".word-panel").click();
   await page.keyboard.type("-T ");
