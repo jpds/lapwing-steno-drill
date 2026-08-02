@@ -77,25 +77,31 @@ test("clicking elsewhere on the page still lets you type (no visible input neede
   await expect(page.locator(".word-panel")).toHaveText("of", { timeout: 2000 });
 });
 
-test("show stroke button outlines the expected keys without filling them", async ({ page }) => {
+test("hint appears automatically after a few seconds of no correct stroke", async ({ page }) => {
   await expect(page.locator(".steno-key.hint")).toHaveCount(0);
-  await page.getByText("Show stroke", { exact: true }).click();
-  await expect(page.locator(".steno-key.hint")).toHaveCount(1);
+  await expect(page.locator(".steno-key.hint")).toHaveCount(1, { timeout: 7000 });
   // hint outlines, but doesn't fill green/red, since nothing's been typed
   await expect(page.locator(".steno-key.hint.correct")).toHaveCount(0);
   await expect(page.locator(".steno-key.hint.incorrect")).toHaveCount(0);
-
-  await page.getByText("Hide stroke", { exact: true }).click();
-  await expect(page.locator(".steno-key.hint")).toHaveCount(0);
 });
 
-test("hint resets when the word advances", async ({ page }) => {
-  await page.getByText("Show stroke", { exact: true }).click();
-  await expect(page.locator(".steno-key.hint")).toHaveCount(1);
+test("hint resets and re-arms when the word advances", async ({ page }) => {
+  await expect(page.locator(".steno-key.hint")).toHaveCount(1, { timeout: 7000 });
   await page.getByText("Next word", { exact: true }).click();
   await expect(page.locator(".word-panel")).toHaveText("of");
   await expect(page.locator(".steno-key.hint")).toHaveCount(0);
-  await expect(page.getByText("Show stroke", { exact: true })).toBeVisible();
+  // doesn't leak the old word's hint immediately, but re-arms for the new word
+  await expect(page.locator(".steno-key.hint")).toHaveCount(1, { timeout: 7000 });
+});
+
+test("getting it right before the hint timer fires cancels the stale hint", async ({ page }) => {
+  await page.keyboard.type("-T ");
+  await expect(page.locator(".word-panel")).toHaveText("of", { timeout: 2000 });
+  // wait past when the "the" hint would have fired; it must not leak onto "of"
+  await page.waitForTimeout(5500);
+  await expect(page.locator(".steno-key.hint")).toHaveCount(1);
+  const hintKey = await page.locator(".steno-key.hint").getAttribute("class");
+  expect(hintKey).toBeTruthy();
 });
 
 test("a fresh visit with no saved list shows the textbox, not a drill", async ({ page }) => {

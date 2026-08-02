@@ -34,7 +34,7 @@ type State =
   , showHint :: Boolean
   }
 
-data Action = Init | UpdateListText String | LoadWordList | EditWordList | HandleInput String | Resolve Boolean | NextWord | ToggleHint | RefocusInput
+data Action = Init | UpdateListText String | LoadWordList | EditWordList | HandleInput String | Resolve Boolean | NextWord | AutoHint Int | RefocusInput
 
 initialState :: State
 initialState = { wordBank: Nothing, listText: "", loadError: Nothing, index: 0, typed: "", locked: false, showHint: false }
@@ -47,6 +47,12 @@ inputRef = H.RefLabel "stroke-capture"
 -- | normal translated word. Everything up to that space is one stroke.
 strokeDelimiter :: String
 strokeDelimiter = " "
+
+-- | How long to wait, with no correct stroke on the current word, before
+-- | outlining the answer automatically. Keeps the learner's hands on the
+-- | steno keyboard instead of having to reach for a "show hint" button.
+hintDelay :: Milliseconds
+hintDelay = Milliseconds 5000.0
 
 component :: forall q i o m. MonadAff m => H.Component q i o m
 component =
@@ -87,10 +93,11 @@ handleAction = case _ of
     if correct then handleAction NextWord else focusInput
   NextWord -> do
     H.modify_ \s -> s { index = s.index + 1, showHint = false }
+    scheduleHint
     focusInput
-  ToggleHint -> do
-    H.modify_ \s -> s { showHint = not s.showHint }
-    focusInput
+  AutoHint forIndex -> do
+    state <- H.get
+    when (state.index == forIndex) $ H.modify_ _ { showHint = true }
   RefocusInput -> focusInput
 
 -- | Parses and validates text as a word list. On success, saves it (so
@@ -103,12 +110,23 @@ tryLoad text = case parseWordList text of
   Right wb -> do
     H.liftEffect (saveList text)
     H.put initialState { wordBank = Just wb, listText = text }
+    scheduleHint
     focusInput
 
 focusInput :: forall o m. MonadAff m => H.HalogenM State Action () o m Unit
 focusInput = do
   el <- H.getHTMLElementRef inputRef
   for_ el (H.liftEffect <<< focus)
+
+-- | Schedules the hint reveal for whichever word is current right now. The
+-- | captured index guards against showing a stale hint if the word has
+-- | already advanced by the time this fires.
+scheduleHint :: forall o m. MonadAff m => H.HalogenM State Action () o m Unit
+scheduleHint = do
+  forIndex <- H.gets _.index
+  void $ H.fork do
+    H.liftAff (Aff.delay hintDelay)
+    handleAction (AutoHint forIndex)
 
 currentEntry :: State -> Maybe WordEntry
 currentEntry state = entryAt state.index <$> state.wordBank
@@ -181,11 +199,6 @@ renderDrill wb state =
   , HH.div
       [ HP.class_ (HH.ClassName "drill-actions") ]
       [ HH.button
-          [ HP.class_ (HH.ClassName "hint-btn")
-          , HE.onClick (\_ -> ToggleHint)
-          ]
-          [ HH.text (if state.showHint then "Hide stroke" else "Show stroke") ]
-      , HH.button
           [ HP.class_ (HH.ClassName "next-word-btn")
           , HE.onClick (\_ -> NextWord)
           ]

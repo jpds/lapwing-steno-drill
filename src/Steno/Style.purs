@@ -154,7 +154,7 @@ drillActionsRule = select (fromString ".drill-actions") do
   prop "margin-top" "1.5rem"
 
 actionBtnRule :: CSS
-actionBtnRule = select (fromString ".next-word-btn, .hint-btn") do
+actionBtnRule = select (fromString ".next-word-btn") do
   padding (rem 0.5) (rem 1.5) (rem 0.5) (rem 1.5)
   fontSize (rem 1.0)
   varProp "background" "--key-bg"
