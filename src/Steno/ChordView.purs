@@ -47,7 +47,7 @@ totalHeight = rowY RowVowel + keySize
 -- | `pressed` is what's been typed so far (or the just-completed attempt);
 -- | `expected` is the current word's correct chord. A pressed key renders
 -- | green if it's part of the expected chord, red otherwise. Unpressed keys
--- | stay neutral, so the answer is never revealed ahead of time — unless
+-- | stay neutral, so the answer is never revealed ahead of time, unless
 -- | `hint` is on (the stuck-learner countdown), which outlines expected keys
 -- | in amber, or `missing` is on (the post-submission review flash), which
 -- | outlines expected-but-unpressed keys in red to call out what was left

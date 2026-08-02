@@ -63,15 +63,17 @@ test("typing the correct stroke highlights it green then advances", async ({ pag
   await expect(page.locator(".word-panel")).toHaveText("of", { timeout: 2000 });
 });
 
-test("typing a wrong stroke highlights it red and retries the same word", async ({ page }) => {
+test("typing a wrong stroke highlights it red and can be corrected with no delay", async ({ page }) => {
   await page.keyboard.type("-S ");
   await expect(page.locator(".steno-key.incorrect")).toHaveCount(1);
-  await page.waitForTimeout(1000);
   await expect(page.locator(".word-panel")).toHaveText("the");
-  await expect(page.locator(".steno-key.incorrect")).toHaveCount(0);
+  // no lockout: the wrong attempt's red highlight clears the moment a new
+  // stroke starts, and the word advances as soon as the correction lands
+  await page.keyboard.type("-T ");
+  await expect(page.locator(".word-panel")).toHaveText("of", { timeout: 2000 });
 });
 
-test("a wrong stroke missing keys outlines the missing ones during the review flash", async ({ page }) => {
+test("a wrong stroke's missing keys are outlined red, and finishing the stroke corrects it immediately", async ({ page }) => {
   // advance to "and" (SKP), which has enough keys to leave one out
   await page.getByText("Next word", { exact: true }).click();
   await page.getByText("Next word", { exact: true }).click();
@@ -87,9 +89,50 @@ test("a wrong stroke missing keys outlines the missing ones during the review fl
   await expect(page.locator(".steno-key.missing.correct")).toHaveCount(0);
   await expect(page.locator(".steno-key.missing.incorrect")).toHaveCount(0);
 
-  // retries the same word once the flash resolves
-  await expect(page.locator(".word-panel")).toHaveText("and", { timeout: 2000 });
+  // no artificial delay: typing the full stroke right away clears the red
+  // outline and advances past "and"
+  await page.keyboard.type("SKP ");
+  await expect(page.locator(".word-panel")).not.toHaveText("and", { timeout: 2000 });
   await expect(page.locator(".steno-key.missing")).toHaveCount(0);
+});
+
+test("a missing key stays a plain static red until the hint also fires, then animates between red and amber", async ({ page }) => {
+  await page.getByText("Next word", { exact: true }).click();
+  await page.getByText("Next word", { exact: true }).click();
+  await page.getByText("Next word", { exact: true }).click();
+  await expect(page.locator(".word-panel")).toHaveText("and");
+
+  await page.keyboard.type("SK ");
+  await expect(page.locator(".steno-key.missing")).toHaveCount(1);
+
+  const missingKey = () => page.locator(".steno-key.missing").first();
+  const missingKeyStroke = () => missingKey().evaluate((el) => getComputedStyle(el).stroke);
+  const missingKeyAnimation = () => missingKey().evaluate((el) => getComputedStyle(el).animationName);
+
+  // before the hint timer fires, a missing key on its own is static -
+  // wait past the base .steno-key CSS transition (150ms) so the color
+  // has settled before sampling, rather than catching it mid-fade
+  await page.waitForTimeout(300);
+  expect(await missingKeyAnimation()).toBe("none");
+  const staticColor = await missingKeyStroke();
+  await page.waitForTimeout(500);
+  expect(await missingKeyStroke()).toBe(staticColor);
+
+  // once the hint also fires for this word, the same key picks up both
+  // classes and starts alternating
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0, { timeout: 7000 });
+  await expect(missingKey()).toHaveClass(/\bhint\b/);
+  expect(await missingKeyAnimation()).toBe("missing-alternate");
+
+  // sample across more than one full 4s cycle - two samples exactly half a
+  // period apart can coincidentally land on the same interpolated color,
+  // so this checks for *any* variation rather than a single before/after pair
+  const seenColors = new Set<string>();
+  for (let i = 0; i < 10; i++) {
+    seenColors.add(await missingKeyStroke());
+    await page.waitForTimeout(500);
+  }
+  expect(seenColors.size).toBeGreaterThan(1);
 });
 
 test("clicking elsewhere on the page still lets you type (no visible input needed)", async ({ page }) => {

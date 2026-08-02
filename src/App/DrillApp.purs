@@ -30,15 +30,33 @@ type State =
   , loadError :: Maybe String
   , index :: Int
   , typed :: String
-  , locked :: Boolean
   , showHint :: Boolean
   , completed :: Boolean
+  , lastStroke :: Maybe { stroke :: String, correct :: Boolean }
   }
 
-data Action = Init | UpdateListText String | LoadWordList | EditWordList | HandleInput String | Resolve Boolean | NextWord | AutoHint Int | RefocusInput | Restart
+data Action
+  = Init
+  | UpdateListText String
+  | LoadWordList
+  | EditWordList
+  | HandleInput String
+  | NextWord
+  | AutoHint Int
+  | RefocusInput
+  | Restart
 
 initialState :: State
-initialState = { wordBank: Nothing, listText: "", loadError: Nothing, index: 0, typed: "", locked: false, showHint: false, completed: false }
+initialState =
+  { wordBank: Nothing
+  , listText: ""
+  , loadError: Nothing
+  , index: 0
+  , typed: ""
+  , showHint: false
+  , completed: false
+  , lastStroke: Nothing
+  }
 
 inputRef :: H.RefLabel
 inputRef = H.RefLabel "stroke-capture"
@@ -55,6 +73,13 @@ strokeDelimiter = " "
 hintDelay :: Milliseconds
 hintDelay = Milliseconds 5000.0
 
+-- | How long a resolved stroke's colors stay on screen before a correct
+-- | one advances to the next word. Short enough not to bottleneck a fast
+-- | typist (steno speeds rarely exceed a stroke every ~200ms), long enough
+-- | to register as a flash rather than an instant cut.
+flashDelay :: Milliseconds
+flashDelay = Milliseconds 150.0
+
 component :: forall q i o m. MonadAff m => H.Component q i o m
 component =
   H.mkComponent
@@ -63,6 +88,12 @@ component =
     , eval: H.mkEval H.defaultEval { handleAction = handleAction, initialize = Just Init }
     }
 
+-- | Input is never blocked: as soon as a stroke resolves (right or wrong),
+-- | `typed` clears immediately so the field is ready for the next raw
+-- | stroke with no risk of it concatenating onto a stale value. The
+-- | resolved stroke's colors keep showing via `lastStroke` (see
+-- | `renderDrill`) until either a new keystroke overwrites it, or, for a
+-- | correct stroke only, `flashDelay` elapses and `NextWord` moves on.
 handleAction :: forall o m. MonadAff m => Action -> H.HalogenM State Action () o m Unit
 handleAction = case _ of
   Init -> do
@@ -75,30 +106,31 @@ handleAction = case _ of
   EditWordList -> do
     listText <- H.gets _.listText
     H.put initialState { listText = listText }
+    focusInput
   HandleInput v -> do
     state <- H.get
-    if state.locked || state.completed then
+    if state.completed then
       pure unit
     else if contains (Pattern strokeDelimiter) v then do
       let stroke = takeWhile (_ /= ' ') v
       entry <- H.gets currentEntry
       let correct = maybe false (\e -> parseStroke stroke == parseStroke e.stroke) entry
-      H.modify_ _ { typed = stroke, locked = true }
-      void $ H.fork do
-        H.liftAff (Aff.delay (Milliseconds 700.0))
-        handleAction (Resolve correct)
+      H.modify_ _ { typed = "", lastStroke = Just { stroke, correct } }
+      if correct then
+        void $ H.fork do
+          H.liftAff (Aff.delay flashDelay)
+          handleAction NextWord
+      else
+        focusInput
     else
-      H.modify_ _ { typed = v }
-  Resolve correct -> do
-    H.modify_ _ { typed = "", locked = false }
-    if correct then handleAction NextWord else focusInput
+      H.modify_ _ { typed = v, lastStroke = Nothing }
   NextWord -> do
     state <- H.get
     case state.wordBank of
       Nothing -> pure unit
       Just wb -> do
         let newIndex = state.index + 1
-        H.modify_ _ { index = newIndex, showHint = false }
+        H.modify_ _ { index = newIndex, showHint = false, lastStroke = Nothing }
         if newIndex >= NEA.length wb then
           H.modify_ _ { completed = true }
         else do
@@ -142,11 +174,15 @@ scheduleHint = do
     H.liftAff (Aff.delay hintDelay)
     handleAction (AutoHint forIndex)
 
-currentEntry :: State -> Maybe WordEntry
-currentEntry state = entryAt state.index <$> state.wordBank
+-- | The word bank always loops via mod, and NextWord marks the drill
+-- | completed the instant index would run past the end, so this
+-- | fromMaybe fallback is unreachable in practice; it just keeps
+-- | NEA.index total without threading a partiality proof through.
+entryAt :: NonEmptyArray WordEntry -> Int -> WordEntry
+entryAt wb index = fromMaybe (NEA.head wb) (NEA.index wb (index `mod` NEA.length wb))
 
-entryAt :: Int -> NonEmptyArray WordEntry -> WordEntry
-entryAt index wb = fromMaybe (NEA.head wb) (NEA.index wb (index `mod` NEA.length wb))
+currentEntry :: State -> Maybe WordEntry
+currentEntry state = (\wb -> entryAt wb state.index) <$> state.wordBank
 
 render :: forall m. State -> H.ComponentHTML Action () m
 render state =
@@ -219,10 +255,10 @@ renderDrill wb state =
       , HH.div
           [ HP.class_ (HH.ClassName "chord-view") ]
           [ chordSvg
-              { pressed: parseStroke state.typed
+              { pressed: parseStroke displayedStroke
               , expected: parseStroke entry.stroke
               , hint: state.showHint
-              , missing: state.locked
+              , missing: maybe false (not <<< _.correct) state.lastStroke
               }
           ]
       ]
@@ -248,5 +284,9 @@ renderDrill wb state =
       ]
   ]
   where
-  entry = entryAt state.index wb
+  entry = entryAt wb state.index
+  -- | An in-progress attempt takes priority; failing that, the last
+  -- | resolved stroke lingers on screen until overwritten by the next
+  -- | keystroke or, for a correct stroke, flashDelay elapsing.
+  displayedStroke = if state.typed /= "" then state.typed else maybe "" _.stroke state.lastStroke
 
