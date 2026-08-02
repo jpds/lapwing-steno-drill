@@ -1,0 +1,18 @@
+package:
+  name: lapwing-steno-drill
+  dependencies:
+    - css
+    - effect
+    - halogen
+    - halogen-svg-elems
+    - parsing
+    - prelude
+  test:
+    main: Test.Main
+    dependencies:
+      - assert
+      - console
+workspace:
+  packageSet:
+    registry: 80.2.1
+  extraPackages: {}

@@ -1,0 +1,20 @@
+{
+  "name": "lapwing-steno-drill",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "build": "spago bundle --bundle-type app --platform browser --outfile dist/app.js",
+    "serve": "python3 -m http.server 8934",
+    "test": "spago test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "AGPL-3.0-or-later",
+  "type": "commonjs",
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}
