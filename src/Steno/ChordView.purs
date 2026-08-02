@@ -18,6 +18,11 @@ keySize = 28.0
 rowGap :: Number
 rowGap = 6.0
 
+-- | Room for the thickest key border (the hint outline, 3px) so it isn't
+-- | clipped by the viewBox edge.
+strokePad :: Number
+strokePad = 2.0
+
 rowTopY :: Number
 rowTopY = 0.0
 
@@ -39,16 +44,22 @@ totalWidth = 11.0 * colWidth + colWidth
 totalHeight :: Number
 totalHeight = rowY RowVowel + keySize
 
-chordSvg :: forall w i. Set StenoKey -> HH.HTML w i
-chordSvg pressed =
+-- | `pressed` is what's been typed so far (or the just-completed attempt);
+-- | `expected` is the current word's correct chord. A pressed key renders
+-- | green if it's part of the expected chord, red otherwise; keys not yet
+-- | pressed stay neutral regardless of `expected`, so the answer is never
+-- | revealed ahead of time — unless `hint` is on, which outlines (but
+-- | doesn't fill) the expected keys, for a learner who's stuck.
+chordSvg :: forall w i. { pressed :: Set StenoKey, expected :: Set StenoKey, hint :: Boolean } -> HH.HTML w i
+chordSvg { pressed, expected, hint } =
   SE.svg
-    [ SA.viewBox 0.0 0.0 totalWidth totalHeight
+    [ SA.viewBox (-strokePad) (-strokePad) (totalWidth + 2.0 * strokePad) (totalHeight + 2.0 * strokePad)
     , SA.classes [ HH.ClassName "chord-svg" ]
     ]
-    (map (renderKey pressed) orderedKeys)
+    (map (renderKey pressed expected hint) orderedKeys)
 
-renderKey :: forall w i. Set StenoKey -> KeySpec -> HH.HTML w i
-renderKey pressed spec =
+renderKey :: forall w i. Set StenoKey -> Set StenoKey -> Boolean -> KeySpec -> HH.HTML w i
+renderKey pressed expected hint spec =
   SE.g []
     [ SE.rect
         [ SA.x xPos
@@ -56,7 +67,7 @@ renderKey pressed spec =
         , SA.width keySize
         , SA.height height
         , SA.rx 4.0
-        , SA.classes [ HH.ClassName "steno-key", HH.ClassName stateClass ]
+        , SA.classes ([ HH.ClassName "steno-key", HH.ClassName stateClass ] <> hintClass)
         ]
     , SE.text
         [ SA.x (xPos + keySize / 2.0)
@@ -71,4 +82,10 @@ renderKey pressed spec =
   xPos = spec.gridCol * colWidth + colWidth / 2.0
   yPos = rowY spec.gridRow
   height = rowHeight spec.gridRow
-  stateClass = if Set.member spec.key pressed then "pressed" else "unpressed"
+  stateClass
+    | not (Set.member spec.key pressed) = "idle"
+    | Set.member spec.key expected = "correct"
+    | otherwise = "incorrect"
+  hintClass
+    | hint && Set.member spec.key expected = [ HH.ClassName "hint" ]
+    | otherwise = []

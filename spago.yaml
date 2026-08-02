@@ -1,7 +1,9 @@
 package:
   name: lapwing-steno-drill
   dependencies:
+    - aff
     - css
+    - datetime
     - effect
     - halogen
     - halogen-svg-elems

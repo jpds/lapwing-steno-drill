@@ -5,7 +5,9 @@
         "path": "./",
         "core": {
           "dependencies": [
+            "aff",
             "css",
+            "datetime",
             "effect",
             "halogen",
             "halogen-svg-elems",
