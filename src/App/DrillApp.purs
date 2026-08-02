@@ -12,6 +12,7 @@ import Data.String (contains)
 import Data.String.CodeUnits (takeWhile)
 import Data.String.Pattern (Pattern(..))
 import Data.Time.Duration (Milliseconds(..))
+import Data.Traversable (traverse)
 import Effect.Aff as Aff
 import Effect.Aff.Class (class MonadAff)
 import Halogen as H
@@ -20,6 +21,7 @@ import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import Steno.ChordView (chordSvg)
 import Steno.Outline (parseStroke)
+import Steno.Shuffle (shuffle)
 import Steno.Storage (loadList, saveList)
 import Steno.WordBank (WordEntry, parseWordList)
 import Web.HTML.HTMLElement (focus)
@@ -142,7 +144,8 @@ handleAction = case _ of
   RefocusInput -> focusInput
   Restart -> do
     state <- H.get
-    H.put initialState { wordBank = state.wordBank, listText = state.listText }
+    reshuffled <- H.liftEffect (traverse shuffle state.wordBank)
+    H.put initialState { wordBank = reshuffled, listText = state.listText }
     scheduleHint
     focusInput
 
@@ -155,7 +158,8 @@ tryLoad text = case parseWordList text of
   Left err -> H.modify_ _ { wordBank = Nothing, listText = text, loadError = Just err }
   Right wb -> do
     H.liftEffect (saveList text)
-    H.put initialState { wordBank = Just wb, listText = text }
+    shuffled <- H.liftEffect (shuffle wb)
+    H.put initialState { wordBank = Just shuffled, listText = text }
     scheduleHint
     focusInput
 

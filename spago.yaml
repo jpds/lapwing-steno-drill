@@ -9,6 +9,7 @@ package:
     - halogen-svg-elems
     - parsing
     - prelude
+    - random
     - web-storage
   test:
     main: Test.Main

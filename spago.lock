@@ -13,6 +13,7 @@
             "halogen-svg-elems",
             "parsing",
             "prelude",
+            "random",
             "web-storage"
           ]
         },

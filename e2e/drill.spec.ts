@@ -25,13 +25,38 @@ const WORDS: Array<[string, string]> = [
   ["from", "TPROPL"],
 ];
 
+const STROKE_BY_WORD = new Map(WORDS);
+
 const WORD_LIST = WORDS.map(([word, stroke]) => word + "\t" + stroke).join("\n");
 
 async function loadWordList(page: Page) {
   await page.locator(".list-input").fill(WORD_LIST);
   await page.getByRole("button", { name: "Load word list" }).click();
-  await expect(page.locator(".word-panel")).toHaveText("the");
+  await expect(page.locator(".word-panel")).toBeVisible();
 }
+
+async function currentWord(page: Page): Promise<string> {
+  return (await page.locator(".word-panel").textContent()) ?? "";
+}
+
+async function currentStroke(page: Page): Promise<string> {
+  const word = await currentWord(page);
+  const stroke = STROKE_BY_WORD.get(word);
+  if (!stroke) throw new Error("no fixture stroke for word " + JSON.stringify(word));
+  return stroke;
+}
+
+// | Removing the last key from a multi-key stroke always changes the
+// | pressed key set, so this is guaranteed wrong for any stroke with 2+
+// | keys. Only used where the caller has already checked for that.
+function droppedLastKey(correct: string): string {
+  return correct.slice(0, -1);
+}
+
+// | "Z" (the rightmost right-hand key) never appears in this fixture's
+// | strokes, so typing it alone is guaranteed to be a wrong stroke
+// | regardless of which word is currently showing.
+const A_WRONG_STROKE = "Z";
 
 test.beforeEach(async ({ page }) => {
   const errors: string[] = [];
@@ -45,8 +70,8 @@ test.afterEach(async ({ page }) => {
   expect((page as any)._consoleErrors ?? []).toEqual([]);
 });
 
-test("renders the first word and chord with no clipping", async ({ page }) => {
-  await expect(page.locator(".word-panel")).toHaveText("the");
+test("renders a word and chord with no clipping", async ({ page }) => {
+  await expect(page.locator(".word-panel")).toBeVisible();
   const svg = page.locator(".chord-view svg");
   await expect(svg).toBeVisible();
   const box = await svg.boundingBox();
@@ -54,56 +79,65 @@ test("renders the first word and chord with no clipping", async ({ page }) => {
 });
 
 test("typing the correct stroke highlights it green then advances", async ({ page }) => {
-  await page.keyboard.type("-T");
-  await expect(page.locator(".steno-key.correct")).toHaveCount(1);
+  const stroke = await currentStroke(page);
+  const word = await currentWord(page);
+  await page.keyboard.type(stroke);
+  await expect(page.locator(".steno-key.correct")).not.toHaveCount(0);
   await expect(page.locator(".steno-key.incorrect")).toHaveCount(0);
   await page.keyboard.type(" ");
   // still showing the resolved (correct) chord during the flash window
-  await expect(page.locator(".steno-key.correct")).toHaveCount(1);
-  await expect(page.locator(".word-panel")).toHaveText("of", { timeout: 2000 });
+  await expect(page.locator(".steno-key.correct")).not.toHaveCount(0);
+  await expect(page.locator(".word-panel")).not.toHaveText(word, { timeout: 2000 });
 });
 
 test("typing a wrong stroke highlights it red and can be corrected with no delay", async ({ page }) => {
-  await page.keyboard.type("-S ");
-  await expect(page.locator(".steno-key.incorrect")).toHaveCount(1);
-  await expect(page.locator(".word-panel")).toHaveText("the");
+  const stroke = await currentStroke(page);
+  const word = await currentWord(page);
+  await page.keyboard.type(A_WRONG_STROKE + " ");
+  await expect(page.locator(".steno-key.incorrect")).not.toHaveCount(0);
+  await expect(page.locator(".word-panel")).toHaveText(word);
   // no lockout: the wrong attempt's red highlight clears the moment a new
   // stroke starts, and the word advances as soon as the correction lands
-  await page.keyboard.type("-T ");
-  await expect(page.locator(".word-panel")).toHaveText("of", { timeout: 2000 });
+  await page.keyboard.type(stroke + " ");
+  await expect(page.locator(".word-panel")).not.toHaveText(word, { timeout: 2000 });
 });
 
 test("a wrong stroke's missing keys are outlined red, and finishing the stroke corrects it immediately", async ({ page }) => {
-  // advance to "and" (SKP), which has enough keys to leave one out
-  await page.getByText("Next word", { exact: true }).click();
-  await page.getByText("Next word", { exact: true }).click();
-  await page.getByText("Next word", { exact: true }).click();
-  await expect(page.locator(".word-panel")).toHaveText("and");
+  // find a word whose stroke has more than one key, so leaving one out is possible
+  let stroke = await currentStroke(page);
+  for (let i = 0; i < WORDS.length && stroke.replace("-", "").length < 2; i++) {
+    await page.getByText("Next word", { exact: true }).click();
+    stroke = await currentStroke(page);
+  }
+  expect(stroke.replace("-", "").length).toBeGreaterThanOrEqual(2);
+  const word = await currentWord(page);
+  const partial = droppedLastKey(stroke);
 
-  await page.keyboard.type("SK ");
-  await expect(page.locator(".steno-key.correct")).toHaveCount(2);
+  await page.keyboard.type(partial + " ");
+  await expect(page.locator(".steno-key.correct")).toHaveCount(partial.replace("-", "").length);
   await expect(page.locator(".steno-key.incorrect")).toHaveCount(0);
-  // P was never pressed, but it's missing from a wrong attempt, so it's
-  // outlined red without being filled green/red like the pressed S and K
-  await expect(page.locator(".steno-key.missing")).toHaveCount(1);
+  // the missing key(s) are outlined red without being filled green/red
+  await expect(page.locator(".steno-key.missing")).not.toHaveCount(0);
   await expect(page.locator(".steno-key.missing.correct")).toHaveCount(0);
   await expect(page.locator(".steno-key.missing.incorrect")).toHaveCount(0);
 
   // no artificial delay: typing the full stroke right away clears the red
-  // outline and advances past "and"
-  await page.keyboard.type("SKP ");
-  await expect(page.locator(".word-panel")).not.toHaveText("and", { timeout: 2000 });
+  // outline and advances past this word
+  await page.keyboard.type(stroke + " ");
+  await expect(page.locator(".word-panel")).not.toHaveText(word, { timeout: 2000 });
   await expect(page.locator(".steno-key.missing")).toHaveCount(0);
 });
 
 test("a missing key stays a plain static red until the hint also fires, then animates between red and amber", async ({ page }) => {
-  await page.getByText("Next word", { exact: true }).click();
-  await page.getByText("Next word", { exact: true }).click();
-  await page.getByText("Next word", { exact: true }).click();
-  await expect(page.locator(".word-panel")).toHaveText("and");
+  let stroke = await currentStroke(page);
+  for (let i = 0; i < WORDS.length && stroke.replace("-", "").length < 2; i++) {
+    await page.getByText("Next word", { exact: true }).click();
+    stroke = await currentStroke(page);
+  }
+  expect(stroke.replace("-", "").length).toBeGreaterThanOrEqual(2);
 
-  await page.keyboard.type("SK ");
-  await expect(page.locator(".steno-key.missing")).toHaveCount(1);
+  await page.keyboard.type(droppedLastKey(stroke) + " ");
+  await expect(page.locator(".steno-key.missing")).not.toHaveCount(0);
 
   const missingKey = () => page.locator(".steno-key.missing").first();
   const missingKeyStroke = () => missingKey().evaluate((el) => getComputedStyle(el).stroke);
@@ -136,35 +170,40 @@ test("a missing key stays a plain static red until the hint also fires, then ani
 });
 
 test("clicking elsewhere on the page still lets you type (no visible input needed)", async ({ page }) => {
+  const stroke = await currentStroke(page);
+  const word = await currentWord(page);
   await page.locator(".word-panel").click();
-  await page.keyboard.type("-T ");
-  await expect(page.locator(".word-panel")).toHaveText("of", { timeout: 2000 });
+  await page.keyboard.type(stroke + " ");
+  await expect(page.locator(".word-panel")).not.toHaveText(word, { timeout: 2000 });
 });
 
 test("hint appears automatically after a few seconds of no correct stroke", async ({ page }) => {
   await expect(page.locator(".steno-key.hint")).toHaveCount(0);
-  await expect(page.locator(".steno-key.hint")).toHaveCount(1, { timeout: 7000 });
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0, { timeout: 7000 });
   // hint outlines, but doesn't fill green/red, since nothing's been typed
   await expect(page.locator(".steno-key.hint.correct")).toHaveCount(0);
   await expect(page.locator(".steno-key.hint.incorrect")).toHaveCount(0);
 });
 
 test("hint resets and re-arms when the word advances", async ({ page }) => {
-  await expect(page.locator(".steno-key.hint")).toHaveCount(1, { timeout: 7000 });
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0, { timeout: 7000 });
+  const word = await currentWord(page);
   await page.getByText("Next word", { exact: true }).click();
-  await expect(page.locator(".word-panel")).toHaveText("of");
+  await expect(page.locator(".word-panel")).not.toHaveText(word);
   await expect(page.locator(".steno-key.hint")).toHaveCount(0);
   // doesn't leak the old word's hint immediately, but re-arms for the new word
-  await expect(page.locator(".steno-key.hint")).toHaveCount(1, { timeout: 7000 });
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0, { timeout: 7000 });
 });
 
 test("getting it right before the hint timer fires cancels the stale hint", async ({ page }) => {
-  await page.keyboard.type("-T ");
-  await expect(page.locator(".word-panel")).toHaveText("of", { timeout: 2000 });
-  // wait past when the "the" hint would have fired; it must not leak onto "of"
+  const stroke = await currentStroke(page);
+  const word = await currentWord(page);
+  await page.keyboard.type(stroke + " ");
+  await expect(page.locator(".word-panel")).not.toHaveText(word, { timeout: 2000 });
+  // wait past when the old word's hint would have fired; it must not leak onto the new word
   await page.waitForTimeout(5500);
-  await expect(page.locator(".steno-key.hint")).toHaveCount(1);
-  const hintKey = await page.locator(".steno-key.hint").getAttribute("class");
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0);
+  const hintKey = await page.locator(".steno-key.hint").first().getAttribute("class");
   expect(hintKey).toBeTruthy();
 });
 
@@ -183,7 +222,7 @@ test("declares the drill complete after the last word, and restart works", async
 
   await page.getByText("Restart", { exact: true }).click();
   await expect(page.locator(".drill-complete")).toHaveCount(0);
-  await expect(page.locator(".word-panel")).toHaveText("the");
+  await expect(page.locator(".word-panel")).toBeVisible();
 });
 
 test("a fresh visit with no saved list shows the textbox, not a drill", async ({ page }) => {
@@ -195,7 +234,7 @@ test("a fresh visit with no saved list shows the textbox, not a drill", async ({
 
 test("reloading the page keeps the previously loaded word list", async ({ page }) => {
   await page.reload();
-  await expect(page.locator(".word-panel")).toHaveText("the");
+  await expect(page.locator(".word-panel")).toBeVisible();
 });
 
 test("rejects an invalid stroke with an inline error and keeps the pasted text", async ({ page }) => {
