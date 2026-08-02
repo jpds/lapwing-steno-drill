@@ -7,6 +7,7 @@ package:
     - halogen-svg-elems
     - parsing
     - prelude
+    - web-storage
   test:
     main: Test.Main
     dependencies:
@@ -16,3 +17,4 @@ workspace:
   packageSet:
     registry: 80.2.1
   extraPackages: {}
+
