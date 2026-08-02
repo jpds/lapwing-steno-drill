@@ -104,6 +104,24 @@ test("getting it right before the hint timer fires cancels the stale hint", asyn
   expect(hintKey).toBeTruthy();
 });
 
+test("declares the drill complete after the last word, and restart works", async ({ page }) => {
+  for (let i = 0; i < WORDS.length - 1; i++) {
+    await page.getByText("Next word", { exact: true }).click();
+  }
+  // still on the last word
+  await expect(page.locator(".word-panel")).toBeVisible();
+  await expect(page.locator(".drill-complete")).toHaveCount(0);
+
+  await page.getByText("Next word", { exact: true }).click();
+  await expect(page.locator(".drill-complete")).toBeVisible();
+  await expect(page.locator(".word-panel")).toHaveCount(0);
+  await expect(page.locator(".stroke-capture")).toHaveCount(0);
+
+  await page.getByText("Restart", { exact: true }).click();
+  await expect(page.locator(".drill-complete")).toHaveCount(0);
+  await expect(page.locator(".word-panel")).toHaveText("the");
+});
+
 test("a fresh visit with no saved list shows the textbox, not a drill", async ({ page }) => {
   await page.evaluate(() => window.localStorage.clear());
   await page.reload();

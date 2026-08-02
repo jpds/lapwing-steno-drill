@@ -32,12 +32,13 @@ type State =
   , typed :: String
   , locked :: Boolean
   , showHint :: Boolean
+  , completed :: Boolean
   }
 
-data Action = Init | UpdateListText String | LoadWordList | EditWordList | HandleInput String | Resolve Boolean | NextWord | AutoHint Int | RefocusInput
+data Action = Init | UpdateListText String | LoadWordList | EditWordList | HandleInput String | Resolve Boolean | NextWord | AutoHint Int | RefocusInput | Restart
 
 initialState :: State
-initialState = { wordBank: Nothing, listText: "", loadError: Nothing, index: 0, typed: "", locked: false, showHint: false }
+initialState = { wordBank: Nothing, listText: "", loadError: Nothing, index: 0, typed: "", locked: false, showHint: false, completed: false }
 
 inputRef :: H.RefLabel
 inputRef = H.RefLabel "stroke-capture"
@@ -76,7 +77,7 @@ handleAction = case _ of
     H.put initialState { listText = listText }
   HandleInput v -> do
     state <- H.get
-    if state.locked then
+    if state.locked || state.completed then
       pure unit
     else if contains (Pattern strokeDelimiter) v then do
       let stroke = takeWhile (_ /= ' ') v
@@ -92,13 +93,26 @@ handleAction = case _ of
     H.modify_ _ { typed = "", locked = false }
     if correct then handleAction NextWord else focusInput
   NextWord -> do
-    H.modify_ \s -> s { index = s.index + 1, showHint = false }
-    scheduleHint
-    focusInput
+    state <- H.get
+    case state.wordBank of
+      Nothing -> pure unit
+      Just wb -> do
+        let newIndex = state.index + 1
+        H.modify_ _ { index = newIndex, showHint = false }
+        if newIndex >= NEA.length wb then
+          H.modify_ _ { completed = true }
+        else do
+          scheduleHint
+          focusInput
   AutoHint forIndex -> do
     state <- H.get
-    when (state.index == forIndex) $ H.modify_ _ { showHint = true }
+    when (state.index == forIndex && not state.completed) $ H.modify_ _ { showHint = true }
   RefocusInput -> focusInput
+  Restart -> do
+    state <- H.get
+    H.put initialState { wordBank = state.wordBank, listText = state.listText }
+    scheduleHint
+    focusInput
 
 -- | Parses and validates text as a word list. On success, saves it (so
 -- | it survives a reload) and starts the drill from the top; on failure,
@@ -144,7 +158,9 @@ render state =
   where
   body = case state.wordBank of
     Nothing -> renderLoader state
-    Just wb -> renderDrill wb state
+    Just wb
+      | state.completed -> renderCompleted wb
+      | otherwise -> renderDrill wb state
 
 renderLoader :: forall m. State -> Array (H.ComponentHTML Action () m)
 renderLoader state =
@@ -172,6 +188,26 @@ renderLoader state =
   loadErrorView = case state.loadError of
     Nothing -> []
     Just err -> [ HH.pre [ HP.class_ (HH.ClassName "list-error") ] [ HH.text err ] ]
+
+renderCompleted :: forall m. NonEmptyArray WordEntry -> Array (H.ComponentHTML Action () m)
+renderCompleted wb =
+  [ HH.div
+      [ HP.class_ (HH.ClassName "drill-complete") ]
+      [ HH.text ("Drill complete! You went through all " <> show (NEA.length wb) <> " words.") ]
+  , HH.div
+      [ HP.class_ (HH.ClassName "drill-actions") ]
+      [ HH.button
+          [ HP.class_ (HH.ClassName "next-word-btn")
+          , HE.onClick (\_ -> Restart)
+          ]
+          [ HH.text "Restart" ]
+      , HH.button
+          [ HP.class_ (HH.ClassName "next-word-btn")
+          , HE.onClick (\_ -> EditWordList)
+          ]
+          [ HH.text "Change word list" ]
+      ]
+  ]
 
 renderDrill :: forall m. NonEmptyArray WordEntry -> State -> Array (H.ComponentHTML Action () m)
 renderDrill wb state =

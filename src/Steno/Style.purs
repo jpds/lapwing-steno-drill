@@ -65,6 +65,7 @@ css = do
   wordPanelRule
   chordViewRule
   chordSvgSvgRule
+  drillCompleteRule
   strokeCaptureRule
   drillActionsRule
   actionBtnRule
@@ -129,6 +130,12 @@ chordSvgSvgRule :: CSS
 chordSvgSvgRule = select (fromString ".chord-view svg") do
   width (pct 100.0)
   height auto
+
+drillCompleteRule :: CSS
+drillCompleteRule = select (fromString ".drill-complete") do
+  fontSize (rem 1.5)
+  TextAlign.textAlign TextAlign.center
+  prop "margin" "2rem 0"
 
 -- | This input is what actually receives typed strokes (see App.DrillApp),
 -- | but the chord diagram already shows live feedback, so there's no need
