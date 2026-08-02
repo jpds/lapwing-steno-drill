@@ -5,13 +5,15 @@
   "scripts": {
     "build": "spago bundle --bundle-type app --platform browser --outfile dist/app.js",
     "serve": "python3 -m http.server 8934",
-    "test": "spago test"
+    "test": "spago test",
+    "test:e2e": "playwright test"
   },
   "keywords": [],
   "author": "",
   "license": "AGPL-3.0-or-later",
   "type": "commonjs",
   "devDependencies": {
+    "@playwright/test": "1.56.1",
     "esbuild": "^0.28.1"
   },
   "allowScripts": {
