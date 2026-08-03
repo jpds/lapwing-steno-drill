@@ -12,3 +12,4 @@ generated-docs/
 .spago
 dist/
 result
+test-results/

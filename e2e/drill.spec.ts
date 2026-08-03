@@ -29,6 +29,13 @@ const STROKE_BY_WORD = new Map(WORDS);
 
 const WORD_LIST = WORDS.map(([word, stroke]) => word + "\t" + stroke).join("\n");
 
+// | Mirrors App.DrillApp's `flashDelay`/`hintDelay`. The page's clock is
+// | mocked (see beforeEach), so these drive `page.clock.runFor` instead of
+// | real waits - a little padding covers rounding, not CI slowness.
+const FLASH_DELAY_MS = 150;
+const HINT_DELAY_MS = 5000;
+const TIMER_PADDING_MS = 100;
+
 async function loadWordList(page: Page) {
   await page.locator(".list-input").fill(WORD_LIST);
   await page.getByRole("button", { name: "Load word list" }).click();
@@ -62,6 +69,9 @@ test.beforeEach(async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   (page as any)._consoleErrors = errors;
+  // Installed before navigating so it's in effect from the app's first
+  // tick, including the hint timer scheduled the moment a word list loads.
+  await page.clock.install();
   await page.goto("/index.html");
   await loadWordList(page);
 });
@@ -88,7 +98,12 @@ test("typing the correct stroke highlights it green, advances, and the progress 
   await page.keyboard.type(" ");
   // still showing the resolved (correct) chord during the flash window
   await expect(page.locator(".steno-key.correct")).not.toHaveCount(0);
-  await expect(page.locator(".word-panel")).not.toHaveText(word, { timeout: 2000 });
+  await expect(page.locator(".word-panel.correct")).not.toHaveCount(0);
+  // hasn't advanced yet - still within the flash window
+  await page.clock.runFor(FLASH_DELAY_MS - TIMER_PADDING_MS);
+  await expect(page.locator(".word-panel")).toHaveText(word);
+  await page.clock.runFor(TIMER_PADDING_MS * 2);
+  await expect(page.locator(".word-panel")).not.toHaveText(word);
   await expect(page.locator(".drill-progress")).toHaveText("2 / " + WORDS.length);
 });
 
@@ -101,7 +116,8 @@ test("typing a wrong stroke highlights it red and can be corrected with no delay
   // no lockout: the wrong attempt's red highlight clears the moment a new
   // stroke starts, and the word advances as soon as the correction lands
   await page.keyboard.type(stroke + " ");
-  await expect(page.locator(".word-panel")).not.toHaveText(word, { timeout: 2000 });
+  await page.clock.runFor(FLASH_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".word-panel")).not.toHaveText(word);
 });
 
 test("a wrong stroke's missing keys are outlined red, and finishing the stroke corrects it immediately", async ({ page }) => {
@@ -126,7 +142,8 @@ test("a wrong stroke's missing keys are outlined red, and finishing the stroke c
   // no artificial delay: typing the full stroke right away clears the red
   // outline and advances past this word
   await page.keyboard.type(stroke + " ");
-  await expect(page.locator(".word-panel")).not.toHaveText(word, { timeout: 2000 });
+  await page.clock.runFor(FLASH_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".word-panel")).not.toHaveText(word);
   await expect(page.locator(".steno-key.missing")).toHaveCount(0);
 });
 
@@ -146,8 +163,10 @@ test("a missing key stays a plain static red until the hint also fires, then ani
   const missingKeyAnimation = () => missingKey().evaluate((el) => getComputedStyle(el).animationName);
 
   // before the hint timer fires, a missing key on its own is static -
-  // wait past the base .steno-key CSS transition (150ms) so the color
-  // has settled before sampling, rather than catching it mid-fade
+  // wait past the base .steno-key CSS transition (150ms, real time - CSS
+  // transitions run on the compositor, unaffected by the mocked JS clock)
+  // so the color has settled before sampling, rather than catching it
+  // mid-fade
   await page.waitForTimeout(300);
   expect(await missingKeyAnimation()).toBe("none");
   const staticColor = await missingKeyStroke();
@@ -156,13 +175,16 @@ test("a missing key stays a plain static red until the hint also fires, then ani
 
   // once the hint also fires for this word, the same key picks up both
   // classes and starts alternating
-  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0, { timeout: 7000 });
+  await page.clock.runFor(HINT_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0);
   await expect(missingKey()).toHaveClass(/\bhint\b/);
   expect(await missingKeyAnimation()).toBe("missing-alternate");
 
-  // sample across more than one full 4s cycle - two samples exactly half a
-  // period apart can coincidentally land on the same interpolated color,
-  // so this checks for *any* variation rather than a single before/after pair
+  // sample across more than one full 4s cycle (real time - the animation
+  // itself is CSS/compositor-driven, not a JS timer) - two samples exactly
+  // half a period apart can coincidentally land on the same interpolated
+  // color, so this checks for *any* variation rather than a single
+  // before/after pair
   const seenColors = new Set<string>();
   for (let i = 0; i < 10; i++) {
     seenColors.add(await missingKeyStroke());
@@ -176,34 +198,48 @@ test("clicking elsewhere on the page still lets you type (no visible input neede
   const word = await currentWord(page);
   await page.locator(".word-panel").click();
   await page.keyboard.type(stroke + " ");
-  await expect(page.locator(".word-panel")).not.toHaveText(word, { timeout: 2000 });
+  await page.clock.runFor(FLASH_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".word-panel")).not.toHaveText(word);
 });
 
 test("hint appears automatically after a few seconds of no correct stroke", async ({ page }) => {
   await expect(page.locator(".steno-key.hint")).toHaveCount(0);
-  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0, { timeout: 7000 });
+  await page.clock.runFor(HINT_DELAY_MS - TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).toHaveCount(0);
+  await page.clock.runFor(TIMER_PADDING_MS * 2);
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0);
   // hint outlines, but doesn't fill green/red, since nothing's been typed
   await expect(page.locator(".steno-key.hint.correct")).toHaveCount(0);
   await expect(page.locator(".steno-key.hint.incorrect")).toHaveCount(0);
 });
 
 test("hint resets and re-arms when the word advances", async ({ page }) => {
-  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0, { timeout: 7000 });
+  await page.clock.runFor(HINT_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0);
   const word = await currentWord(page);
   await page.getByText("Next word", { exact: true }).click();
   await expect(page.locator(".word-panel")).not.toHaveText(word);
   await expect(page.locator(".steno-key.hint")).toHaveCount(0);
   // doesn't leak the old word's hint immediately, but re-arms for the new word
-  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0, { timeout: 7000 });
+  await page.clock.runFor(HINT_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0);
 });
 
 test("getting it right before the hint timer fires cancels the stale hint", async ({ page }) => {
   const stroke = await currentStroke(page);
   const word = await currentWord(page);
   await page.keyboard.type(stroke + " ");
-  await expect(page.locator(".word-panel")).not.toHaveText(word, { timeout: 2000 });
-  // wait past when the old word's hint would have fired; it must not leak onto the new word
-  await page.waitForTimeout(5500);
+  await page.clock.runFor(FLASH_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".word-panel")).not.toHaveText(word);
+  // advance past when the *old* word's hint timer would have fired (it
+  // was scheduled before the correction, so this crosses it), but stop
+  // short of the *new* word's own timer (rescheduled ~FLASH_DELAY_MS
+  // later): if AutoHint's stale-guard were missing, the old timer firing
+  // here would show the hint prematurely
+  await page.clock.runFor(HINT_DELAY_MS - FLASH_DELAY_MS - TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).toHaveCount(0);
+  // now cross the new word's own timer
+  await page.clock.runFor(FLASH_DELAY_MS + TIMER_PADDING_MS * 2);
   await expect(page.locator(".steno-key.hint")).not.toHaveCount(0);
   const hintKey = await page.locator(".steno-key.hint").first().getAttribute("class");
   expect(hintKey).toBeTruthy();
@@ -248,6 +284,7 @@ test("rejects an invalid stroke with an inline error and keeps the pasted text",
   await expect(page.locator(".list-input")).toHaveValue("bad\tXYZ123");
 });
 
+
 test("dark mode via prefers-color-scheme changes the theme", async ({ page }) => {
   const lightBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   await page.emulateMedia({ colorScheme: "dark" });
@@ -255,4 +292,3 @@ test("dark mode via prefers-color-scheme changes the theme", async ({ page }) =>
   const darkBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   expect(darkBg).not.toBe(lightBg);
 });
-
