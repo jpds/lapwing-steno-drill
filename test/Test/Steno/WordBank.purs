@@ -26,7 +26,9 @@ main = do
   testAcceptsCrlfLineEndings
   testRejectsInvalidStroke
   testRejectsEmptyStroke
-  testRejectsMultiStrokeOutline
+  testAcceptsMultiStrokeOutline
+  testRejectsInvalidSegment
+  testRejectsEmptySegment
   testRejectsEmptyInput
   testReportsAllBadLines
 
@@ -71,10 +73,24 @@ testRejectsEmptyStroke = case parseWordList "the\t-" of
   Left _ -> pure unit
   Right _ -> assertEqual' "expected a stroke with no keys to be rejected" { actual: true, expected: false }
 
-testRejectsMultiStrokeOutline :: Effect Unit
-testRejectsMultiStrokeOutline = case parseWordList "faculty\tTPA/KULT" of
-  Left _ -> pure unit
-  Right _ -> assertEqual' "expected a multi-stroke outline to be rejected" { actual: true, expected: false }
+testAcceptsMultiStrokeOutline :: Effect Unit
+testAcceptsMultiStrokeOutline = case parseWordList "faculty\tTPA/KULT" of
+  Left err -> assertEqual' ("expected a multi-stroke outline to parse, got error: " <> err) { actual: false, expected: true }
+  Right entries -> case NEA.toArray entries of
+    [ entry ] -> do
+      assertEqual' "entry word" { actual: entry.word, expected: "faculty" }
+      assertEqual' "entry strokes" { actual: NEA.toArray entry.strokes, expected: [ "TPA", "KULT" ] }
+    _ -> assertEqual' "expected exactly one entry" { actual: true, expected: false }
+
+testRejectsInvalidSegment :: Effect Unit
+testRejectsInvalidSegment = case parseWordList "faculty\tTPA/XYZ123" of
+  Left err -> assertEqual' "error mentions the offending segment" { actual: contains "XYZ123" err, expected: true }
+  Right _ -> assertEqual' "expected an invalid segment to be rejected" { actual: true, expected: false }
+
+testRejectsEmptySegment :: Effect Unit
+testRejectsEmptySegment = case parseWordList "faculty\tTPA/" of
+  Left err -> assertEqual' "error mentions line 1" { actual: contains "Line 1" err, expected: true }
+  Right _ -> assertEqual' "expected an empty trailing segment to be rejected" { actual: true, expected: false }
 
 testRejectsEmptyInput :: Effect Unit
 testRejectsEmptyInput = case parseWordList "\n\n  \n" of
@@ -89,15 +105,18 @@ testReportsAllBadLines = case parseWordList "bad1\tXYZ\nbad2\tABC" of
   Right _ -> assertEqual' "expected both invalid strokes to be rejected" { actual: true, expected: false }
 
 checkEntry :: WordEntry -> Effect Unit
-checkEntry entry = case parseStrokeStrict entry.stroke of
+checkEntry entry = for_ (NEA.toArray entry.strokes) (checkSegment entry.word)
+
+checkSegment :: String -> String -> Effect Unit
+checkSegment word stroke = case parseStrokeStrict stroke of
   Left err ->
     assertEqual'
-      ("\"" <> entry.word <> "\" (" <> entry.stroke <> ") failed to parse: " <> show err)
+      ("\"" <> word <> "\" (" <> stroke <> ") failed to parse: " <> show err)
       { actual: false, expected: true }
   Right keys ->
     assertEqual'
-      ("\"" <> entry.word <> "\" (" <> entry.stroke <> ") round-trip")
-      { actual: serialize keys, expected: stripDashes entry.stroke }
+      ("\"" <> word <> "\" (" <> stroke <> ") round-trip")
+      { actual: serialize keys, expected: stripDashes stroke }
 
 serialize :: Set StenoKey -> String
 serialize keys =

@@ -284,6 +284,77 @@ test("rejects an invalid stroke with an inline error and keeps the pasted text",
   await expect(page.locator(".list-input")).toHaveValue("bad\tXYZ123");
 });
 
+async function loadMultiStrokeFixtureOnFaculty(page: Page) {
+  const MULTI_STROKE_LIST = "faculty\tTPA/KULT\nthe\t-T";
+  await page.getByText("Change word list", { exact: true }).click();
+  await page.locator(".list-input").fill(MULTI_STROKE_LIST);
+  await page.getByRole("button", { name: "Load word list" }).click();
+  await expect(page.locator(".word-panel")).toBeVisible();
+
+  // word list order is shuffled on load, so advance until "faculty" comes up
+  for (let i = 0; i < 2 && (await currentWord(page)) !== "faculty"; i++) {
+    await page.getByText("Next word", { exact: true }).click();
+  }
+  await expect(page.locator(".word-panel")).toHaveText("faculty");
+}
+
+test("a multi-stroke outline shows each segment's letters up front, marking the current one", async ({ page }) => {
+  await loadMultiStrokeFixtureOnFaculty(page);
+  await expect(page.locator(".outline-segment")).toHaveCount(2);
+  await expect(page.locator(".outline-segment").nth(0)).toHaveText("TPA");
+  await expect(page.locator(".outline-segment").nth(1)).toHaveText("KULT");
+  await expect(page.locator(".outline-segment.segment-current")).toHaveText("TPA");
+  await expect(page.locator(".outline-segment.segment-done")).toHaveCount(0);
+
+  // completing the first segment marks it done immediately, ahead of
+  // flashDelay's transition, so no clock advance is needed here - its
+  // letters stay visible throughout, unlike the still-untyped next bubble
+  await page.keyboard.type("TPA ");
+  await expect(page.locator(".outline-segment.segment-done")).toHaveText("TPA");
+  await expect(page.locator(".outline-segment").nth(1)).toHaveText("KULT");
+});
+
+test("typing two correct strokes back-to-back, faster than flashDelay, still judges the second one against the right segment", async ({ page }) => {
+  await loadMultiStrokeFixtureOnFaculty(page);
+  // deliberately no clock advance between strokes - this only passes if
+  // HandleInput's eager catch-up (not the delayed fork) is what advances
+  // strokeIndex before KULT is judged
+  await page.keyboard.type("TPA ");
+  await page.keyboard.type("KULT ");
+  await expect(page.locator(".steno-key.incorrect")).toHaveCount(0);
+  await page.clock.runFor(FLASH_DELAY_MS + TIMER_PADDING_MS);
+  // completing "faculty" may end the drill and remove .word-panel entirely,
+  // which `.not.toHaveText("faculty")` wouldn't catch - a vanished element
+  // still "doesn't have" the text. Assert its absence directly instead.
+  await expect(page.locator(".word-panel", { hasText: "faculty" })).toHaveCount(0);
+});
+
+test("once the hint appears, the multi-stroke breakdown highlights each segment as it's completed, and only advances after the last one", async ({ page }) => {
+  await loadMultiStrokeFixtureOnFaculty(page);
+  await page.clock.runFor(HINT_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0);
+
+  await expect(page.locator(".outline-segment")).toHaveCount(2);
+  await expect(page.locator(".outline-segment.segment-done")).toHaveCount(0);
+
+  // first segment: highlights green, but the word doesn't advance
+  await page.keyboard.type("TPA ");
+  await expect(page.locator(".outline-segment.segment-done")).toHaveCount(1);
+  await expect(page.locator(".word-panel")).toHaveText("faculty");
+  await expect(page.locator(".word-panel.correct")).toHaveCount(0);
+  // the segment itself only advances once flashDelay's transition runs
+  await page.clock.runFor(FLASH_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".outline-segment.segment-current")).toHaveText("KULT");
+
+  // second (final) segment: word flashes green and advances
+  await page.keyboard.type("KULT ");
+  await expect(page.locator(".word-panel.correct")).not.toHaveCount(0);
+  await page.clock.runFor(FLASH_DELAY_MS + TIMER_PADDING_MS);
+  // completing "faculty" may end the drill and remove .word-panel entirely,
+  // which `.not.toHaveText("faculty")` wouldn't catch - a vanished element
+  // still "doesn't have" the text. Assert its absence directly instead.
+  await expect(page.locator(".word-panel", { hasText: "faculty" })).toHaveCount(0);
+});
 
 test("dark mode via prefers-color-scheme changes the theme", async ({ page }) => {
   const lightBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);

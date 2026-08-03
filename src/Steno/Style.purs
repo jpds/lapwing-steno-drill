@@ -21,6 +21,7 @@ import CSS
   , keyframes
   , margin
   , maxWidth
+  , minHeight
   , padding
   , pct
   , px
@@ -66,6 +67,7 @@ css = do
   drillProgressRule
   drillColumnsRule
   wordPanelRule
+  outlineProgressRule
   chordViewRule
   chordSvgSvgRule
   drillCompleteRule
@@ -129,10 +131,44 @@ drillColumnsRule = select (fromString ".drill-columns") do
   prop "gap" "1.5rem"
 
 wordPanelRule :: CSS
-wordPanelRule = select (fromString ".word-panel") do
-  fontSize (rem 3.0)
-  fontFamily [] (monospace :| [])
-  TextAlign.textAlign TextAlign.center
+wordPanelRule = do
+  select (fromString ".word-panel") do
+    fontSize (rem 3.0)
+    fontFamily [] (monospace :| [])
+    TextAlign.textAlign TextAlign.center
+    borderRadius (px 6.0) (px 6.0) (px 6.0) (px 6.0)
+    prop "transition" "background-color 0.15s ease, color 0.15s ease"
+  select (fromString ".word-panel.correct") do
+    varProp "background" "--key-correct-bg"
+    varProp "color" "--key-correct-text"
+
+-- | Only rendered for multi-stroke outlines (more than one `/`-separated
+-- | segment) - a single-stroke word shows no progress row, so existing
+-- | word lists look unchanged.
+outlineProgressRule :: CSS
+outlineProgressRule = do
+  select (fromString ".outline-progress") do
+    fontSize (rem 1.25)
+    fontFamily [] (monospace :| [])
+    TextAlign.textAlign TextAlign.center
+    prop "gap" "0.5rem"
+    display flex
+    prop "justify-content" "center"
+  select (fromString ".outline-segment") do
+    varProp "color" "--key-text"
+    padding (px 2.0) (px 6.0) (px 2.0) (px 6.0)
+    borderRadius (px 12.0) (px 12.0) (px 12.0) (px 12.0)
+    prop "border" "1.5px solid var(--key-border)"
+    minHeight (px 20.0)
+    prop "transition" "background-color 0.15s ease, border-color 0.15s ease"
+  select (fromString ".outline-segment.segment-done") do
+    prop "border-color" "transparent"
+    varProp "background" "--key-correct-bg"
+    varProp "color" "--key-correct-text"
+  select (fromString ".outline-segment.segment-current") do
+    varProp "border-color" "--key-hint-border"
+  select (fromString ".outline-separator") do
+    varProp "color" "--key-text"
 
 chordViewRule :: CSS
 chordViewRule = select (fromString ".chord-view") do
