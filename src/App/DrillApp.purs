@@ -24,7 +24,11 @@ import Steno.Outline (parseStroke)
 import Steno.Shuffle (shuffle)
 import Steno.Storage (loadList, saveList)
 import Steno.WordBank (WordEntry, parseWordList)
+import Unsafe.Reference (unsafeRefEq)
+import Web.HTML (window)
+import Web.HTML.HTMLDocument (activeElement)
 import Web.HTML.HTMLElement (focus)
+import Web.HTML.Window (document)
 
 type State =
   { wordBank :: Maybe (NonEmptyArray WordEntry)
@@ -37,6 +41,9 @@ type State =
   , completed :: Boolean
   , lastStroke :: Maybe { stroke :: String, correct :: Boolean }
   , pendingAdvance :: Maybe { index :: Int, strokeIndex :: Int, isLastSegment :: Boolean }
+  , inputFocused :: Boolean
+  , showFocusWarning :: Boolean
+  , focusEpoch :: Int
   }
 
 data Action
@@ -48,6 +55,7 @@ data Action
   | NextWord
   | AutoHint Int Int
   | RefocusInput
+  | InputFocusChanged Boolean
   | Restart
 
 initialState :: State
@@ -62,6 +70,9 @@ initialState =
   , completed: false
   , lastStroke: Nothing
   , pendingAdvance: Nothing
+  , inputFocused: true
+  , showFocusWarning: false
+  , focusEpoch: 0
   }
 
 inputRef :: H.RefLabel
@@ -83,6 +94,13 @@ hintDelay = Milliseconds 5000.0
 -- | one advances to the next segment or word (see `catchUpAdvance`).
 flashDelay :: Milliseconds
 flashDelay = Milliseconds 150.0
+
+-- | How long the input must stay unfocused before the word blurs -
+-- | clicking any button in this app blurs the hidden input for a tick
+-- | before `focusInput` reclaims it, so a short debounce keeps that from
+-- | flashing the blur on every click.
+focusWarningDelay :: Milliseconds
+focusWarningDelay = Milliseconds 400.0
 
 component :: forall q i o m. MonadAff m => H.Component q i o m
 component =
@@ -107,8 +125,13 @@ handleAction = case _ of
     state <- H.get
     tryLoad state.listText
   EditWordList -> do
-    listText <- H.gets _.listText
-    H.put initialState { listText = listText }
+    state <- H.get
+    H.put initialState
+      { listText = state.listText
+      , inputFocused = state.inputFocused
+      , showFocusWarning = state.showFocusWarning
+      , focusEpoch = state.focusEpoch
+      }
     focusInput
   HandleInput v -> do
     beforeCatchUp <- H.get
@@ -144,13 +167,37 @@ handleAction = case _ of
     advanceWord
   AutoHint forIndex forStrokeIndex -> do
     state <- H.get
-    when (state.index == forIndex && state.strokeIndex == forStrokeIndex && not state.completed) $
+    -- a timer armed while focused can still fire after focus is lost
+    -- (see `scheduleHint`), so this re-checks focus, not just position
+    let stillCurrent = state.index == forIndex && state.strokeIndex == forStrokeIndex
+    when (stillCurrent && not state.completed && state.inputFocused) $
       H.modify_ _ { showHint = true }
   RefocusInput -> focusInput
+  InputFocusChanged true -> do
+    H.modify_ _ { inputFocused = true, showFocusWarning = false }
+    state <- H.get
+    when (isJust state.wordBank && not state.completed && not state.showHint) scheduleHint
+  InputFocusChanged false -> do
+    state <- H.get
+    let epoch = state.focusEpoch + 1
+    H.modify_ _ { inputFocused = false, focusEpoch = epoch }
+    void $ H.fork do
+      H.liftAff (Aff.delay focusWarningDelay)
+      cur <- H.get
+      -- `epoch` guards against a stale fork from an earlier, already-ended
+      -- blur outliving a more recent one (same pattern as `pendingAdvance`)
+      when (not cur.inputFocused && cur.focusEpoch == epoch) $
+        H.modify_ _ { showFocusWarning = true, showHint = false }
   Restart -> do
     state <- H.get
     reshuffled <- H.liftEffect (traverse shuffle state.wordBank)
-    H.put initialState { wordBank = reshuffled, listText = state.listText }
+    H.put initialState
+      { wordBank = reshuffled
+      , listText = state.listText
+      , inputFocused = state.inputFocused
+      , showFocusWarning = state.showFocusWarning
+      , focusEpoch = state.focusEpoch
+      }
     scheduleHint
     focusInput
 
@@ -196,26 +243,45 @@ tryLoad text = case parseWordList text of
   Right wb -> do
     H.liftEffect (saveList text)
     shuffled <- H.liftEffect (shuffle wb)
-    H.put initialState { wordBank = Just shuffled, listText = text }
+    state <- H.get
+    H.put initialState
+      { wordBank = Just shuffled
+      , listText = text
+      , inputFocused = state.inputFocused
+      , showFocusWarning = state.showFocusWarning
+      , focusEpoch = state.focusEpoch
+      }
     scheduleHint
     focusInput
 
+-- | `.focus()` can silently fail (e.g. the browser window isn't focused),
+-- | and `onFocus`/`onBlur` only fire on an actual focus change - so this
+-- | verifies against `document.activeElement` rather than assuming success.
 focusInput :: forall o m. MonadAff m => H.HalogenM State Action () o m Unit
 focusInput = do
   el <- H.getHTMLElementRef inputRef
-  for_ el (H.liftEffect <<< focus)
+  for_ el \element -> do
+    H.liftEffect (focus element)
+    actuallyFocused <- H.liftEffect do
+      doc <- document =<< window
+      active <- activeElement doc
+      pure (maybe false (unsafeRefEq element) active)
+    state <- H.get
+    when (actuallyFocused /= state.inputFocused) $
+      handleAction (InputFocusChanged actuallyFocused)
 
--- | Schedules the hint reveal for whichever word/segment is current right
--- | now. The captured position guards against showing a stale hint if the
--- | word or segment has already advanced by the time this fires - each
--- | new segment of a multi-stroke outline re-arms its own countdown, same
--- | as each new word does.
+-- | Schedules the hint reveal for the current word/segment; the captured
+-- | position guards against a stale hint if it's advanced by the time this
+-- | fires. Skips arming while unfocused, since strokes aren't reaching the
+-- | app - `InputFocusChanged` restarts it on refocus, and `AutoHint`
+-- | re-checks focus in case it's lost mid-countdown.
 scheduleHint :: forall o m. MonadAff m => H.HalogenM State Action () o m Unit
 scheduleHint = do
   state <- H.get
-  void $ H.fork do
-    H.liftAff (Aff.delay hintDelay)
-    handleAction (AutoHint state.index state.strokeIndex)
+  when state.inputFocused $
+    void $ H.fork do
+      H.liftAff (Aff.delay hintDelay)
+      handleAction (AutoHint state.index state.strokeIndex)
 
 -- | The word bank always loops via mod, and NextWord marks the drill
 -- | completed the instant index would run past the end, so this
@@ -301,7 +367,7 @@ renderDrill wb state =
   , HH.div
       [ HP.class_ (HH.ClassName "drill-columns") ]
       [ HH.div
-          [ HP.class_ (HH.ClassName ("word-panel" <> if wordFlash then " correct" else "")) ]
+          [ HP.class_ (HH.ClassName ("word-panel" <> wordPanelStateClass)) ]
           [ HH.text entry.word ]
       , outlineProgress
       , HH.div
@@ -320,6 +386,8 @@ renderDrill wb state =
       , HP.value state.typed
       , HP.autofocus true
       , HE.onValueInput HandleInput
+      , HE.onFocus (\_ -> InputFocusChanged true)
+      , HE.onBlur (\_ -> InputFocusChanged false)
       ]
   , HH.div
       [ HP.class_ (HH.ClassName "drill-actions") ]
@@ -337,6 +405,14 @@ renderDrill wb state =
   ]
   where
   entry = entryAt wb state.index
+  -- | The stroke-capture input is visually hidden, so a lost-focus state
+  -- | (which silently stops all strokes) would otherwise have no on-screen
+  -- | sign - blurring the word itself doubles as the "click to resume" cue,
+  -- | since the whole app already refocuses the input on any click.
+  wordPanelStateClass
+    | state.showFocusWarning = " unfocused"
+    | wordFlash = " correct"
+    | otherwise = ""
   -- | An in-progress attempt takes priority; failing that, the last
   -- | resolved stroke lingers until overwritten or cleared (see `catchUpAdvance`).
   displayedStroke = if state.typed /= "" then state.typed else maybe "" _.stroke state.lastStroke

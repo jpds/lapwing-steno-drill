@@ -34,6 +34,7 @@ const WORD_LIST = WORDS.map(([word, stroke]) => word + "\t" + stroke).join("\n")
 // | real waits - a little padding covers rounding, not CI slowness.
 const FLASH_DELAY_MS = 150;
 const HINT_DELAY_MS = 5000;
+const FOCUS_WARNING_DELAY_MS = 400;
 const TIMER_PADDING_MS = 100;
 
 async function loadWordList(page: Page) {
@@ -193,13 +194,44 @@ test("a missing key stays a plain static red until the hint also fires, then ani
   expect(seenColors.size).toBeGreaterThan(1);
 });
 
-test("clicking elsewhere on the page still lets you type (no visible input needed)", async ({ page }) => {
+test("clicking elsewhere on the page still lets you type (no visible input needed), and only a sustained blur blurs the word", async ({ page }) => {
   const stroke = await currentStroke(page);
   const word = await currentWord(page);
   await page.locator(".word-panel").click();
   await page.keyboard.type(stroke + " ");
   await page.clock.runFor(FLASH_DELAY_MS + TIMER_PADDING_MS);
   await expect(page.locator(".word-panel")).not.toHaveText(word);
+
+  // a button click blurs the hidden input for a tick before focusInput
+  // reclaims it - too brief to trip the debounce, so the word never blurs.
+  // The clock is mocked (see beforeEach), so the debounce fork only
+  // advances via clock.runFor, not a real wait.
+  await page.getByText("Next word", { exact: true }).click();
+  await page.clock.runFor(FOCUS_WARNING_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".word-panel")).not.toHaveClass(/\bunfocused\b/);
+
+  // staying unfocused (no reclaiming focusInput call) blurs the word
+  await page.locator(".stroke-capture").evaluate((el: HTMLElement) => el.blur());
+  await expect(page.locator(".word-panel")).not.toHaveClass(/\bunfocused\b/);
+  await page.clock.runFor(FOCUS_WARNING_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".word-panel")).toHaveClass(/\bunfocused\b/);
+
+  // clicking anywhere in the app refocuses the input (see RefocusInput)
+  await page.locator(".word-panel").click();
+  await expect(page.locator(".word-panel")).not.toHaveClass(/\bunfocused\b/);
+});
+
+test("the word blurs if focus silently fails to take on load (e.g. the window wasn't focused yet)", async ({ page }) => {
+  // stubbing .focus() wouldn't be enough - the browser's native autofocus
+  // bypasses it - so this stubs document.activeElement itself, the exact
+  // thing focusInput checks. No onFocus/onBlur ever fires here.
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "activeElement", { get: () => document.body });
+  });
+  await page.reload();
+  await expect(page.locator(".word-panel")).toBeVisible();
+  await page.clock.runFor(FOCUS_WARNING_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".word-panel")).toHaveClass(/\bunfocused\b/);
 });
 
 test("hint appears automatically after a few seconds of no correct stroke", async ({ page }) => {
@@ -222,6 +254,61 @@ test("hint resets and re-arms when the word advances", async ({ page }) => {
   await expect(page.locator(".steno-key.hint")).toHaveCount(0);
   // doesn't leak the old word's hint immediately, but re-arms for the new word
   await page.clock.runFor(HINT_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0);
+});
+
+test("an armed hint timer doesn't reveal the hint if focus is lost before it fires, and resumes once refocused", async ({ page }) => {
+  // a timer armed *while* focused must not reveal the hint if focus is
+  // lost before it fires - AutoHint re-checks focus at reveal time, not
+  // just at schedule time
+  await page.locator(".stroke-capture").evaluate((el: HTMLElement) => el.blur());
+  await page.clock.runFor(HINT_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).toHaveCount(0);
+  await expect(page.locator(".word-panel")).toHaveClass(/\bunfocused\b/);
+
+  await page.locator(".word-panel").click();
+  await page.clock.runFor(HINT_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0);
+});
+
+test("an already-visible hint disappears once the input stays unfocused, and comes back after refocusing", async ({ page }) => {
+  await page.clock.runFor(HINT_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0);
+
+  await page.locator(".stroke-capture").evaluate((el: HTMLElement) => el.blur());
+  await page.clock.runFor(FOCUS_WARNING_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".word-panel")).toHaveClass(/\bunfocused\b/);
+  await expect(page.locator(".steno-key.hint")).toHaveCount(0);
+
+  // refocusing re-arms a fresh countdown rather than instantly re-revealing
+  await page.locator(".word-panel").click();
+  await expect(page.locator(".steno-key.hint")).toHaveCount(0);
+  await page.clock.runFor(HINT_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).not.toHaveCount(0);
+});
+
+test("the hint timer doesn't start while the input is unable to hold focus, and resumes once refocused", async ({ page }) => {
+  // simulate the input genuinely unable to hold focus (e.g. the browser
+  // window itself isn't focused), so the app's own focusInput() calls
+  // (fired on every word advance) can't silently win it back
+  await page.evaluate(() => {
+    (window as any).__realFocus = HTMLElement.prototype.focus;
+    HTMLElement.prototype.focus = () => {};
+  });
+  await page.locator(".stroke-capture").evaluate((el: HTMLElement) => el.blur());
+  await page.getByText("Next word", { exact: true }).click();
+  await page.clock.runFor(HINT_DELAY_MS + TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).toHaveCount(0);
+
+  // restore real focus, then click to let the app reclaim it - this
+  // should re-arm the hint timer for the current word
+  await page.evaluate(() => {
+    HTMLElement.prototype.focus = (window as any).__realFocus;
+  });
+  await page.locator(".word-panel").click();
+  await page.clock.runFor(HINT_DELAY_MS - TIMER_PADDING_MS);
+  await expect(page.locator(".steno-key.hint")).toHaveCount(0);
+  await page.clock.runFor(TIMER_PADDING_MS * 2);
   await expect(page.locator(".steno-key.hint")).not.toHaveCount(0);
 });
 

@@ -137,10 +137,12 @@ wordPanelRule = do
     fontFamily [] (monospace :| [])
     TextAlign.textAlign TextAlign.center
     borderRadius (px 6.0) (px 6.0) (px 6.0) (px 6.0)
-    prop "transition" "background-color 0.15s ease, color 0.15s ease"
+    prop "transition" "background-color 0.15s ease, color 0.15s ease, filter 0.15s ease"
   select (fromString ".word-panel.correct") do
     varProp "background" "--key-correct-bg"
     varProp "color" "--key-correct-text"
+  select (fromString ".word-panel.unfocused") do
+    prop "filter" "blur(8px)"
 
 -- | Only rendered for multi-stroke outlines (more than one `/`-separated
 -- | segment) - a single-stroke word shows no progress row, so existing
